@@ -15,6 +15,7 @@
 #define GOOGLE_PROTOBUF_MAP_H__
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -594,21 +595,63 @@ inline void UntypedMapIterator::PlusPlus() {
 class MapFieldBaseForParse {
  public:
   const UntypedMapBase& GetMap() const {
-    return vtable_->get_map(*this, false);
+    const auto p = payload_.load(std::memory_order_acquire);
+    // If this instance has a payload, then it might need sync'n.
+    if (ABSL_PREDICT_FALSE(IsPayload(p))) {
+      sync_map_with_repeated.load(std::memory_order_relaxed)(*this, false);
+    }
+    return GetMapRaw();
   }
+
   UntypedMapBase* MutableMap() {
-    return &const_cast<UntypedMapBase&>(vtable_->get_map(*this, true));
+    const auto p = payload_.load(std::memory_order_acquire);
+    // If this instance has a payload, then it might need sync'n.
+    if (ABSL_PREDICT_FALSE(IsPayload(p))) {
+      sync_map_with_repeated.load(std::memory_order_relaxed)(*this, true);
+    }
+    return &GetMapRaw();
   }
 
  protected:
-  struct VTable {
-    const UntypedMapBase& (*get_map)(const MapFieldBaseForParse&,
-                                     bool is_mutable);
-  };
+  static constexpr size_t MapOffset() { return sizeof(MapFieldBaseForParse); }
+
+  // See assertion in TypeDefinedMapFieldBase::TypeDefinedMapFieldBase()
+  const UntypedMapBase& GetMapRaw() const {
+    return *reinterpret_cast<const UntypedMapBase*>(
+        reinterpret_cast<const char*>(this) + MapOffset());
+  }
+  UntypedMapBase& GetMapRaw() {
+    return *reinterpret_cast<UntypedMapBase*>(reinterpret_cast<char*>(this) +
+                                              MapOffset());
+  }
+
+  struct VTable {};
+
+  // Injected from map_field.cc once we need to use it.
+  // We can't have a strong dep on it because it would cause protobuf_lite to
+  // depend on reflection.
+  using SyncFunc = void (*)(const MapFieldBaseForParse&, bool is_mutable);
+  static std::atomic<SyncFunc> sync_map_with_repeated;
+
   explicit constexpr MapFieldBaseForParse(const VTable* vtable)
       : vtable_(vtable) {}
+
+  enum class TaggedPtr : uintptr_t {};
+  explicit MapFieldBaseForParse(const VTable* vtable, TaggedPtr ptr)
+      : payload_(ptr), vtable_(vtable) {
+    // We should not have a payload on construction.
+    ABSL_DCHECK(!IsPayload(ptr));
+  }
+
   ~MapFieldBaseForParse() = default;
 
+  static constexpr uintptr_t kHasPayloadBit = 1;
+
+  static bool IsPayload(TaggedPtr p) {
+    return static_cast<uintptr_t>(p) & kHasPayloadBit;
+  }
+
+  mutable std::atomic<TaggedPtr> payload_{};
   const VTable* vtable_;
 };
 

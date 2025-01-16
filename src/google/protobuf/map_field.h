@@ -300,7 +300,7 @@ class PROTOBUF_EXPORT MapFieldBase : public MapFieldBaseForParse {
   explicit constexpr MapFieldBase(const VTable* vtable)
       : MapFieldBaseForParse(vtable) {}
   explicit MapFieldBase(const VTable* vtable, Arena* arena)
-      : MapFieldBaseForParse(vtable), payload_{ToTaggedPtr(arena)} {}
+      : MapFieldBaseForParse(vtable, ToTaggedPtr(arena)) {}
   MapFieldBase(const MapFieldBase&) = delete;
   MapFieldBase& operator=(const MapFieldBase&) = delete;
 
@@ -314,7 +314,6 @@ class PROTOBUF_EXPORT MapFieldBase : public MapFieldBaseForParse {
   template <typename T>
   static constexpr VTable MakeVTable() {
     VTable out{};
-    out.get_map = &T::GetMapImpl;
     out.get_prototype = &T::GetPrototypeImpl;
     return out;
   }
@@ -466,9 +465,6 @@ class PROTOBUF_EXPORT MapFieldBase : public MapFieldBaseForParse {
                         : STATE_MODIFIED_MAP;
   }
 
-  static const UntypedMapBase& GetMapImpl(const MapFieldBaseForParse& map,
-                                          bool is_mutable);
-
  private:
   friend class ContendedMapCleanTest;
   friend class GeneratedMessageReflection;
@@ -491,14 +487,6 @@ class PROTOBUF_EXPORT MapFieldBase : public MapFieldBaseForParse {
         ->PlacementNew(msg, arena());
   }
 
-  // See assertion in TypeDefinedMapFieldBase::TypeDefinedMapFieldBase()
-  const UntypedMapBase& GetMapRaw() const {
-    return *reinterpret_cast<const UntypedMapBase*>(this + 1);
-  }
-  UntypedMapBase& GetMapRaw() {
-    return *reinterpret_cast<UntypedMapBase*>(this + 1);
-  }
-
   // Virtual helper methods for MapIterator. MapIterator doesn't have the
   // type helper for key and value. Call these help methods to deal with
   // different types. Real helper methods are implemented in
@@ -514,10 +502,6 @@ class PROTOBUF_EXPORT MapFieldBase : public MapFieldBaseForParse {
   void IncreaseIterator(MapIterator* map_iter) const;
 
   bool LookupMapValueNoSync(const MapKey& map_key, MapValueConstRef* val) const;
-
-  enum class TaggedPtr : uintptr_t {};
-  static constexpr uintptr_t kHasPayloadBit = 1;
-
   static ReflectionPayload* ToPayload(TaggedPtr p) {
     ABSL_DCHECK(IsPayload(p));
     auto* res = reinterpret_cast<ReflectionPayload*>(static_cast<uintptr_t>(p) -
@@ -536,11 +520,6 @@ class PROTOBUF_EXPORT MapFieldBase : public MapFieldBaseForParse {
   static TaggedPtr ToTaggedPtr(Arena* p) {
     return static_cast<TaggedPtr>(reinterpret_cast<uintptr_t>(p));
   }
-  static bool IsPayload(TaggedPtr p) {
-    return static_cast<uintptr_t>(p) & kHasPayloadBit;
-  }
-
-  mutable std::atomic<TaggedPtr> payload_{};
 };
 
 // This class provides common Map Reflection implementations for generated
@@ -550,11 +529,10 @@ class TypeDefinedMapFieldBase : public MapFieldBase {
  public:
   explicit constexpr TypeDefinedMapFieldBase(const VTable* vtable)
       : MapFieldBase(vtable), map_() {
-    // This invariant is required by MapFieldBase to easily access the map
-    // member without paying for dynamic dispatch. It reduces code size.
-    static_assert(PROTOBUF_FIELD_OFFSET(TypeDefinedMapFieldBase, map_) ==
-                      sizeof(MapFieldBase),
-                  "");
+    // This invariant is required by `GetMapRaw` to easily access the map
+    // member without paying for dynamic dispatch.
+    static_assert(MapFieldBaseForParse::MapOffset() ==
+                  PROTOBUF_FIELD_OFFSET(TypeDefinedMapFieldBase, map_));
   }
   TypeDefinedMapFieldBase(const TypeDefinedMapFieldBase&) = delete;
   TypeDefinedMapFieldBase& operator=(const TypeDefinedMapFieldBase&) = delete;

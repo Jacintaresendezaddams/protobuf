@@ -156,7 +156,12 @@ DynamicMapField::DynamicMapField(const Message* default_entry,
     : MapFieldBase(&kVTable, arena),
       map_(arena, DefaultEntryToTypeInfo(default_entry,
                                          mapped_default_entry_if_message)),
-      default_entry_(default_entry) {}
+      default_entry_(default_entry) {
+  // This invariant is required by `GetMapRaw` to easily access the map
+  // member without paying for dynamic dispatch.
+  static_assert(MapFieldBaseForParse::MapOffset() ==
+                PROTOBUF_FIELD_OFFSET(DynamicMapField, map_));
+}
 
 constexpr DynamicMapField::VTable DynamicMapField::kVTable =
     MakeVTable<DynamicMapField>();
